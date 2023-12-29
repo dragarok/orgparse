@@ -1,0 +1,31 @@
+# ((done . "CLOSING NOTE %t") (state . "State %-12s from %-12S %t")
+#  (note . "Note taken on %t") (reschedule . "Rescheduled from %S on %t")
+#  (delschedule . "Not scheduled, was %S on %t")
+#  (redeadline . "New deadline from %S on %t")
+#  (deldeadline . "Removed deadline, was %S on %t") (refile . "Refiled on %t")
+#  (clock-out . ""))
+# - Note taken on [2023-12-24 Sun 08:26] \\
+#   Hello world
+#   We have been keeping this world sane.
+
+* TODO [#A] Tasks notes :task:
+SCHEDULED: <2023-12-24 Sun .+1d>
+:PROPERTIES:
+:CATEGORY: Normal
+:END:
+:LOGBOOK:
+- State "CANCELED"   from "TODO"       [2023-12-23 Sat 06:24]
+- State "CANCELLED"  from "TODO"       [2023-12-21 Thu 20:31] \\
+  Lazy and one piece
+- State "CANCELLED"  from "TODO"       [2023-12-20 Wed 19:49] \\
+  Not finding right mindset to do it
+- State "CANCELLED"  from "TODO"       [2023-12-19 Tue 20:05] \\
+  Work stretching very much
+- State "CANCELED"   from "TODO"       [2023-12-17 Sun 21:15]
+- State "DONE"       from "TODO"       [2023-12-16 Sat 18:20]
+CLOCK: [2023-12-16 Sat 17:51]--[2023-12-16 Sat 18:11] => 0:20
+- Rescheduled from "[2023-12-18 Mon]" on [2023-12-24 Sun 10:00] \\
+  No time to do it today.
+- State "DONE"       from "TODO"       [2023-12-15 Fri 18:20]
+CLOCK: [2023-12-15 Fri 17:50]--[2023-12-15 Fri 18:20] =>  0:30
+:END:
