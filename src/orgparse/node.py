@@ -1,8 +1,9 @@
 import re
 import itertools
 from typing import List, Iterable, Iterator, Optional, Union, Tuple, cast, Dict, Set, Sequence, Any
+from datetime import datetime
 
-from .date import OrgDate, OrgDateClock, OrgDateRepeatedTask, parse_sdc, OrgDateScheduled, OrgDateDeadline, OrgDateClosed
+from .date import OrgDate, OrgDateClock, OrgDateRepeatedTask, parse_sdc, OrgDateScheduled, OrgDateDeadline, OrgDateClosed, OrgDateTimestampNote
 from .inline import to_plain_text
 from .extra import to_rich_text, Rich
 
@@ -1124,6 +1125,7 @@ class OrgNode(OrgBaseNode):
         self._clocklist: List[OrgDateClock] = []
         self._body_lines: List[str] = []
         self._repeated_tasks: List[OrgDateRepeatedTask] = []
+        self._timestamp_log_notes: List[OrgDateTimestampNote] = []
 
     # parser
 
@@ -1140,6 +1142,13 @@ class OrgNode(OrgBaseNode):
         ilines = self._iparse_clock(ilines)
         ilines = self._iparse_properties(ilines)
         ilines = self._iparse_repeated_tasks(ilines)
+        ilines = self._iparse_timestamp_log_note(ilines, note_format="CLOSING NOTE %t")
+        ilines = self._iparse_timestamp_log_note(ilines, note_format="Note taken on %t")
+        ilines = self._iparse_timestamp_log_note(ilines, note_format="Rescheduled from %S on %t")
+        ilines = self._iparse_timestamp_log_note(ilines, note_format="Not scheduled, was %S on %t")
+        ilines = self._iparse_timestamp_log_note(ilines, note_format="New deadline from %S on %t")
+        ilines = self._iparse_timestamp_log_note(ilines, note_format="Refiled on %t")
+        ilines = self._iparse_timestamp_log_note(ilines, note_format="Removed deadline, was %S on %t")
         ilines = self._iparse_timestamps(ilines)
         self._body_lines = list(ilines)
 
@@ -1197,26 +1206,143 @@ class OrgNode(OrgBaseNode):
 
     def _iparse_repeated_tasks(self, ilines: Iterator[str]) -> Iterator[str]:
         self._repeated_tasks = []
+        note_lines = []
+        skipped_line = None
+        # just ensuring that the loop doesn't miss line when check returns
+        # false for a note
+        ilines, peek_ilines = itertools.tee(ilines)
+        next(peek_ilines, None)  # Advance the peeking iterator
+
         for line in ilines:
             match = self._repeated_tasks_re.search(line)
             if match:
-                # FIXME: move this parsing to OrgDateRepeatedTask.from_str
+                # Start a new entry
                 mdict = match.groupdict()
                 done_state = mdict['done']
                 todo_state = mdict['todo']
                 date = OrgDate.from_str(mdict['date'])
-                self._repeated_tasks.append(
-                    OrgDateRepeatedTask(date.start, todo_state, done_state))
+                note_lines = []
+
+                if mdict['hasnote']:
+                    # Collect multiline notes
+                    while True:
+                        try:
+                            peek_line = next(peek_ilines, "")
+                            if not peek_line.startswith('  ') or peek_line.startswith("  :END:") or peek_line.lstrip().startswith('-'):
+                                # Not a note line or start of a new entry, handle it in the next iteration
+                                break
+                            note_lines.append(next(ilines))
+                        except StopIteration:
+                            # End of the file
+                            break
+                    note = " \n".join(note_lines)
+                else:
+                    note = None
+                    next(peek_ilines)
+                current_entry = OrgDateRepeatedTask(start=date.start, before=todo_state, after=done_state, note=note)
+                self._repeated_tasks.append(current_entry)
             else:
                 yield line
+                try:
+                    next(peek_ilines)
+                except StopIteration:
+                    break
 
     _repeated_tasks_re = re.compile(
         r'''
         \s*- \s+
         State \s+ "(?P<done> [^"]+)" \s+
         from  \s+ "(?P<todo> [^"]+)" \s+
-        \[ (?P<date> [^\]]+) \]''',
+        \[ (?P<date> [^\]]+) \] \s*
+        (?P<hasnote>\\)*''',
         re.VERBOSE)
+
+    _default_timestamp_notes = [
+        "CLOSING NOTE %t",
+        "Note taken on %t",
+        "Rescheduled from %S on %t",
+        "Not scheduled, was %S on %t",
+        "Removed deadline, was %S on %t"]
+
+    def _parse_org_timestamp_note_to_pyregex_str(self, note_format: str) -> str:
+        """
+        note_format: CLOSING NOTE %t
+        """
+        oldts_regex = r'''\s* "\[ (?P<oldts> [^\]]+) \]" \s*'''
+        newts_regex = r'''\s* \[ (?P<newts> [^\]]+) \] \s*'''
+        has_note_regex =  r'''\s*(?P<hasnote>\\)*'''
+        base_regex = r'''\s*- \s+'''
+        for piece in note_format.split(" "):
+            if piece == "%S":
+                base_regex += oldts_regex
+            elif piece == "%t":
+                base_regex += newts_regex
+            else:
+                base_regex += r'''\s*''' + piece + r'''\s*'''
+        base_regex += has_note_regex
+        return base_regex
+
+    def _iparse_timestamp_log_note(self, ilines: Iterator[str], note_format: str) -> Iterator[str]:
+        """
+        note_format:
+            any of these texts or any format like "CLOSING NOTE %t"
+            e.g. this is taken from emacs default variable for log notes
+            ((done . "CLOSING NOTE %t")
+            (note . "Note taken on %t") (reschedule . "Rescheduled from %S on %t")
+            (delschedule . "Not scheduled, was %S on %t")
+            (redeadline . "New deadline from %S on %t")
+            (deldeadline . "Removed deadline, was %S on %t") (refile . "Refiled on %t")
+            (clock-out . ""))
+        Except state changes:  (state . "State %-12s from %-12S %t") which are handled as repeated tasks.
+        """
+        timestamp_note_regex = re.compile(self._parse_org_timestamp_note_to_pyregex_str(note_format),
+                                          re.VERBOSE)
+        ilines, peek_ilines = itertools.tee(ilines)
+        next(peek_ilines, None)  # Advance the peeking iterator
+
+        for line in ilines:
+            match = timestamp_note_regex.search(line)
+            if match:
+                # Start a new entry
+                mdict = match.groupdict()
+                oldts = mdict.get('oldts', None)
+                newts = mdict.get('newts', None)
+                if newts:
+                    newts = OrgDate.from_str(newts).start
+                    start_date = newts
+                if oldts:
+                    oldts = OrgDate.from_str(oldts).start
+                    start_date = oldts
+                else:
+                    start_date = OrgDate.from_str(datetime.now().strftime("%Y-%m-%d %a")).start
+
+                note_lines = []
+
+                if mdict.get('hasnote'):
+                    # Collect multiline notes
+                    while True:
+                        try:
+                            peek_line = next(peek_ilines, "")
+                            if not peek_line.startswith('  ') or peek_line.startswith("  :END:") or peek_line.lstrip().startswith('-'):
+                                # Not a note line or start of a new entry, handle it in the next iteration
+                                break
+                            note_lines.append(next(ilines))
+                        except StopIteration:
+                            # End of the file
+                            break
+                    note = " \n".join(note_lines)
+                else:
+                    note = None
+                    next(peek_ilines)
+                current_entry = OrgDateTimestampNote(noteformat=note_format, start=start_date, oldts=oldts, newts=newts, note=note)
+                self._timestamp_log_notes.append(current_entry)
+            else:
+                yield line
+                try:
+                    next(peek_ilines)
+                except StopIteration:
+                    break
+
 
     def get_heading(self, format='plain'):
         """
@@ -1431,6 +1557,52 @@ class OrgNode(OrgBaseNode):
 
         """
         return self._repeated_tasks
+
+    @property
+    def timestamp_log_notes(self):
+        """
+        Get repeated tasks marked DONE in an entry having repeater.
+
+        :rtype: list of :class:`orgparse.date.OrgDateRepeatedTask`
+
+        >>> from orgparse import loads
+        >>> node = loads('''
+        ... * TODO Pay the rent
+        ...   DEADLINE: <2005-10-01 Sat +1m>
+        ...   - State "DONE"  from "TODO"  [2005-09-01 Thu 16:10]
+        ...   - State "DONE"  from "TODO"  [2005-08-01 Mon 19:44]
+        ...   - State "DONE"  from "TODO"  [2005-07-01 Fri 17:27]
+        ... ''').children[0]
+        >>> node.repeated_tasks            # doctest: +NORMALIZE_WHITESPACE
+        [OrgDateRepeatedTask((2005, 9, 1, 16, 10, 0), 'TODO', 'DONE'),
+         OrgDateRepeatedTask((2005, 8, 1, 19, 44, 0), 'TODO', 'DONE'),
+         OrgDateRepeatedTask((2005, 7, 1, 17, 27, 0), 'TODO', 'DONE')]
+        >>> node.repeated_tasks[0].before
+        'TODO'
+        >>> node.repeated_tasks[0].after
+        'DONE'
+
+        Repeated tasks in ``:LOGBOOK:`` can be fetched by the same code.
+
+        >>> node = loads('''
+        ... * TODO Pay the rent
+        ...   DEADLINE: <2005-10-01 Sat +1m>
+        ...   :LOGBOOK:
+        ...   - State "DONE"  from "TODO"  [2005-09-01 Thu 16:10]
+        ...   - State "DONE"  from "TODO"  [2005-08-01 Mon 19:44]
+        ...   - State "DONE"  from "TODO"  [2005-07-01 Fri 17:27]
+        ...   :END:
+        ... ''').children[0]
+        >>> node.repeated_tasks            # doctest: +NORMALIZE_WHITESPACE
+        [OrgDateRepeatedTask((2005, 9, 1, 16, 10, 0), 'TODO', 'DONE'),
+         OrgDateRepeatedTask((2005, 8, 1, 19, 44, 0), 'TODO', 'DONE'),
+         OrgDateRepeatedTask((2005, 7, 1, 17, 27, 0), 'TODO', 'DONE')]
+
+        See: `(info "(org) Repeated tasks")
+        <http://orgmode.org/manual/Repeated-tasks.html>`_
+
+        """
+        return self._timestamp_log_notes
 
 
 def parse_lines(lines: Iterable[str], filename, env=None) -> OrgNode:

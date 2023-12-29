@@ -674,23 +674,26 @@ class OrgDateRepeatedTask(OrgDate):
 
     _active_default = False
 
-    def __init__(self, start, before, after, active=None):
+    def __init__(self, start, before, after, active=None, note=None):
         super(OrgDateRepeatedTask, self).__init__(start, active=active)
         self._before = before
         self._after = after
+        self._note = note
 
     def __repr__(self):
-        args = [self._date_to_tuple(self.start), self.before, self.after]
+        args = [self._date_to_tuple(self.start), self.before, self.after, self.note]
         if self._active is not self._active_default:
             args.append(self._active)
         return '{0}({1})'.format(
             self.__class__.__name__, ', '.join(map(repr, args)))
 
     def __eq__(self, other):
+        # TODO Note comparing doesn't have to be essential
         return super(OrgDateRepeatedTask, self).__eq__(other) and \
             isinstance(other, self.__class__) and \
             self._before == other._before and \
-            self._after == other._after
+            self._after == other._after ^ \
+            self._note == other._note
 
     @property
     def before(self):
@@ -715,3 +718,121 @@ class OrgDateRepeatedTask(OrgDate):
 
         """
         return self._after
+    @property
+    def note(self):
+        """
+        The note associated with state change if it exists.
+
+        >>> od = OrgDateRepeatedTask((2005, 9, 1, 16, 10, 0), 'TODO', 'DONE', 'My Note about state change')
+        >>> od.note
+        'My Note about state change'
+        """
+        return self._note
+
+class OrgDateTimestampNote(OrgDate):
+
+    """
+    Date object to represent timestamp notes taken on org nodes.
+    """
+
+    _active_default = False
+
+    def __init__(self, start, noteformat, oldts=None, newts=None, active=None, note=None):
+        super(OrgDateTimestampNote, self).__init__(start, active=active)
+        self._oldts = oldts
+        self._newts = newts
+        self._note = note
+        self._noteformat = noteformat
+
+    def __repr__(self):
+        args = [
+            self.noteformat,
+            self._date_to_tuple(self._oldts) if self.has_oldts() else None,
+            self._date_to_tuple(self._newts) if self.has_newts() else None,
+            self._note if self.has_note() else ""
+        ]
+        if self._active is not self._active_default:
+            args.append(self._active)
+        return '{0}({1})'.format(
+            self.__class__.__name__, ', '.join(map(repr, args)))
+
+    def __str__(self):
+        ret_str = self.noteformat
+        if self.has_newts():
+            newts = date_time_format(self.newts)
+            ret_str = ret_str.replace("%t", newts)
+        if self.has_oldts():
+            oldts = date_time_format(self.oldts)
+            ret_str = ret_str.replace("%S", oldts)
+        if self.has_note():
+            ret_str += " with note: "
+            ret_str += self.note
+        return ret_str
+
+    def __eq__(self, other):
+        # TODO Note comparing doesn't have to be essential
+        return super(OrgDateRepeatedTask, self).__eq__(other) and \
+            isinstance(other, self.__class__) and \
+            self._noteformat == other._noteformat and \
+            self._oldts == other._oldts and \
+            self._newts == other._newts and \
+            self._note == other._note
+
+    def has_oldts(self):
+        """Return true if it has oldts date"""
+        return bool(self._oldts)
+
+    def has_newts(self):
+        """Return true if it has oldts date"""
+        return bool(self._newts)
+
+    def has_note(self):
+        """Return true if it has oldts date"""
+        return bool(self._note)
+
+    @property
+    def noteformat(self):
+        """
+        The note associated with state change if it exists.
+
+        >>> od = OrgDateRepeatedTask((2005, 9, 1, 16, 10, 0), 'TODO', 'DONE', 'My Note about state change')
+        >>> od.noteformat
+        'Note taken on %t'
+        """
+        return self._noteformat
+
+    @property
+    def oldts(self):
+        """
+        The state of task before marked as done.
+
+        >>> od = OrgDateRepeatedTask((2005, 9, 1, 16, 10, 0), 'TODO', 'DONE')
+        >>> od.oldts
+        OrgDate((2005, 9, 1, 16, 10, 0))
+
+        """
+        return self._oldts
+
+    @property
+    def newts(self):
+        """
+        The state of task after marked as done.
+
+        >>> od = OrgDateRepeatedTask((2005, 9, 1, 16, 10, 0), 'TODO', 'DONE')
+        >>> od.newts
+        OrgDate(2005, 9, 1, 16, 10, 0)
+
+        """
+        return self._newts
+
+    @property
+    def note(self):
+        """
+        The note associated with state change if it exists.
+
+        >>> od = OrgDateRepeatedTask((2005, 9, 1, 16, 10, 0), 'TODO', 'DONE', 'My Note about state change')
+        >>> od.note
+        'My Note about state change'
+        """
+        return self._note
+
